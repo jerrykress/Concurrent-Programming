@@ -1,0 +1,366 @@
+// COMS20001 - Cellular Automaton Farm - Initial Code Skeleton
+// (using the XMOS i2c accelerometer demo code)
+
+#include <platform.h>
+#include <xs1.h>
+#include <stdio.h>
+#include "pgmIO.h"
+#include "i2c.h"
+
+#define  IMHT 16                  //image height
+#define  IMWD 16                  //image width
+
+typedef unsigned char uchar;      //using uchar as shorthand
+
+port p_scl = XS1_PORT_1E;         //interface ports to orientation
+port p_sda = XS1_PORT_1F;
+
+#define FXOS8700EQ_I2C_ADDR 0x1E  //register addresses for orientation
+#define FXOS8700EQ_XYZ_DATA_CFG_REG 0x0E
+#define FXOS8700EQ_CTRL_REG_1 0x2A
+#define FXOS8700EQ_DR_STATUS 0x0
+#define FXOS8700EQ_OUT_X_MSB 0x1
+#define FXOS8700EQ_OUT_X_LSB 0x2
+#define FXOS8700EQ_OUT_Y_MSB 0x3
+#define FXOS8700EQ_OUT_Y_LSB 0x4
+#define FXOS8700EQ_OUT_Z_MSB 0x5
+#define FXOS8700EQ_OUT_Z_LSB 0x6
+
+on tile[0] : in port buttons = XS1_PORT_4E; //port to access xCore-200 buttons
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Read Image from PGM file from path infname[] to channel c_out
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+void DataInStream(char infname[], chanend c_out)
+{
+  int res;
+  uchar line[ IMWD ], packedByte;
+  printf( "DataInStream: Start...\n" );
+
+  //Open PGM file
+  res = _openinpgm( infname, IMWD, IMHT );
+  if( res ) {
+    printf( "DataInStream: Error openening %s\n.", infname );
+    return;
+  }
+
+  //Read image line-by-line and send byte by byte to channel c_out
+  for( int y = 0; y < IMHT; y++ ) {
+    _readinline( line, IMWD );
+    int counter = 0, shifter = 7;
+    packedByte = 0;
+    for( int x = 0; x < IMWD; x++ ) {
+      // packing
+      if (counter == 8){
+          c_out <: packedByte;
+          printf( "-%4.1d ", packedByte ); //show image values
+          counter = 0;
+          shifter = 7;
+          packedByte = 0;
+      }
+      if (counter < 8) {
+          packedByte += ( line[ x ] & 0x01 ) << shifter;
+          shifter--;
+          counter++;
+      }
+    }
+    printf( "\n" );
+  }
+
+  //Close PGM image file
+  _closeinpgm();
+  printf( "DataInStream: Done...\n" );
+  return;
+}
+
+int checkNeighbours(uchar worldCopy[][ IMWD / 8 ], int x, int y, int shifter) {
+    int attemptedLeftX, attemptedRightX, attemptedHigherY, attemptedLowerY;
+    int alive = 0, neighbourShifter = 0;
+
+    // Set attempted coordinates.
+    // Marginal cases
+
+    // Check left neighbour
+    if (x == 0) {
+        if (shifter == 7) {
+            if (((copyWorld[y][IMWD / 8 - 1]) & 0X01) == 1) alive++;
+        } else { // shift != 7
+            if (((copyWorld[y][x] >> (shifter + 1)) & 0x01) == 1) alive++;
+        }
+    } else { // x != 0
+        if (shift == 7) {
+            if ((copyWorld[y][x - 1] & 0x01) == 1) alive++;
+        } else { // shift != 7
+            if (((copyWorld[y][x] >> (shifter + 1)) & 0x01) == 1) alive++;
+        }
+    }
+
+    // Check right neighbour
+    if (x == IMWD / 8 - 1) {
+        if (shift == 0) {
+            if (((copyWorld[y][0] >> 7) & 0x01) == 1) alive++;
+        } else {
+            if (((copyWorld[y][x] >> (shifter - 1)) & 0x01) == 1) alive++;
+        }
+    } else {
+        if (shift == 0) {
+            if (((copyWorld[y][x + 1] >> 7) & 0x01) == 1) alive++;
+        } else {
+            if (((copyWorld[y][x] >> (shifter - 1)) & 0x01) == 1) alive++;
+        }
+    }
+
+    // Check up neighbour
+    if (y == 0) {
+        if (((copyWorld[ IMHT - 1][x] >> shifter) & 0x01) == 1) alive++;
+    } else {
+        if (((copyWorld[y - 1][x] >> shifter) & 0x01) == 1) alive++;
+    }
+
+    // Check down neighbour
+    if (y == IMHT - 1) {
+        if (((copyWorld[0][x] >> shifter) & 0x01) == 1) alive++;
+    } else {
+        if (((copyWorld[y][0] >> 7) & 0x01) == 1) alive++;
+    }
+
+//
+//    attemptedLeftX = x - 1;
+//    if (attemptedLeftX < 0) attemptedLeftX = IMWD - 1;
+//    attemptedRightX = x + 1;
+//    if (attemptedRightX > IMWD - 1) attemptedRightX = 0;
+//    attemptedHigherY = y - 1;
+//    if (attemptedHigherY < 0) attemptedHigherY = IMHT - 1;
+//    attemptedLowerY = y + 1;
+//    if (attemptedLowerY > IMHT - 1) attemptedLowerY = 0;
+
+    if (worldCopy[attemptedHigherY][attemptedLeftX] == 255) alive++;
+    if (worldCopy[attemptedHigherY][x] == 255) alive++;
+    if (worldCopy[attemptedHigherY][attemptedRightX] == 255) alive++;
+    if (worldCopy[y][attemptedRightX] == 255) alive++;
+    if (worldCopy[attemptedLowerY][attemptedRightX] == 255) alive++;
+    if (worldCopy[attemptedLowerY][x] == 255) alive++;
+    if (worldCopy[attemptedLowerY][attemptedLeftX] == 255) alive++;
+    if (worldCopy[y][attemptedLeftX] == 255) alive++;
+
+    return alive;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Start your implementation by changing this function to implement the game of life
+// by farming out parts of the image to worker threads who implement it...
+// Currently the function just inverts the image
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+void distributor(in port p_button, chanend c_in, chanend c_out, chanend fromAcc, chanend toOut){
+  uchar val;
+  int r = 0, round = 1, liveCount = 0;
+  uchar originalWorld[ IMHT ][ IMWD ], copyWorld[ IMHT ][ IMWD ];
+
+  //Starting up and wait for tilting of the xCore-200 Explorer
+  printf( "ProcessImage: Start, size = %dx%d\n", IMHT, IMWD );
+  printf( "Waiting for SW1 button (left) to be pressed...\n" );
+//  fromAcc :> int value;
+
+   while (r != 14) {
+       p_button when pinsneq(15) :> r;    // check if some buttons are pressed
+       if (r==14) {     // if either button is pressed
+           //Game logic begins
+
+           //Read in and do something with your image values..
+           //This just inverts every pixel, but you should
+           //change the image according to the "Game of Life"
+           printf( "Processing...\n" );
+
+               for( int y = 0; y < IMHT; y++ ) {   //go through all lines
+                 for( int x = 0; x < IMWD / 8; x++ ) { //go through each pixel per line
+                   c_in :> val;                    //read the pixel value
+                   originalWorld[y][x] = val;
+                   copyWorld[y][x] = val;
+                   // Update liveCount
+                   int i = 0;
+                   while (i < 8) {
+                       uchar bit = ( val >> i ) & 0x01;
+                       if (bit == 1) liveCount++;
+                       i++;
+                   }
+                 }
+            }
+       }
+   }
+
+           while (1){
+
+               // Print report to console when tilted
+//               printf("-----------------------------\n PRINTING PAUSE REPORT \n-----------------------------\n");
+//               printf("Number of rounds processed so far: %d\n", round);
+               printf("Current number of live cells: %d\n", liveCount);
+
+                 for( int y = 0; y < IMHT; y++ ) {   //go through all lines
+                     for( int x = 0; x < IMWD / 8; x++ ) { //go through each pixel per line
+//                         int aliveNeighbours = checkNeighbours(copyWorld, x, y);
+//                         if (aliveNeighbours < 2 || aliveNeighbours > 3) {
+//                             if (originalWorld[y][x] == 255) liveCount--;
+//                             originalWorld[y][x] = 0;
+//                         }
+//                         else if (originalWorld[y][x] == 0 && aliveNeighbours == 3) {
+//                             originalWorld[y][x] = 255;
+//                             liveCount++;
+//                         }
+
+                         // Updating game config using bits
+                         while (i < 8) {
+                             int aliveNeighbours = checkNeighbours(copyWorld, x, y, shifter);
+                             //Update logic here and the liveCount
+
+                             //Increase shifter
+
+
+                         }
+
+                     }
+                 }
+
+
+                 // Updating copyWorld
+                 for( int y = 0; y < IMHT; y++ ) {   //go through all lines
+                       for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
+                           copyWorld[y][x] = originalWorld[y][x];
+                       }
+                 }
+
+                 //Check for SW2 button being pressed
+                 // Idea got from XMOS docs
+                 int current_val = 14;
+
+
+                     select{
+                         // event when the button changes value
+                         case p_button when pinsneq(current_val) :> int new_val:
+                             if (new_val == 13) {
+                                 toOut <: 1;
+                                 for( int y = 0; y < IMHT; y++ ) {   //go through all lines
+                                                        for( int x = 0; x < IMWD; x++ ) { //go through each pixel per line
+                                                            c_out <: originalWorld[y][x];
+                                                        }
+                                                  }
+                             } else {
+                                 break;
+                             }
+
+                             break;
+                     }
+
+
+                 printf( "\nRound no. %d completed...\n", round );
+                 round++;
+               }
+
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Write pixel stream from channel c_in to PGM image file
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+void DataOutStream(char outfname[], chanend c_in, chanend fromD)
+{
+  int res, printCommand;
+  uchar line[ IMWD ];
+
+  while(1) {
+       fromD :> printCommand;
+       //Open PGM file
+       printf( "DataOutStream: Start...\n" );
+       res = _openoutpgm( outfname, IMWD, IMHT );
+
+       if( res ) {
+           printf( "DataOutStream: Error opening %s\n.", outfname );
+           return;
+         }
+
+         //Compile each line of the image and write the image line-by-line
+       for( int y = 0; y < IMHT; y++ ) {
+          for( int x = 0; x < IMWD; x++ ) {
+             c_in :> line[ x ];
+           }
+           _writeoutline( line, IMWD );
+           printf( "DataOutStream: Line written...\n" );
+         }
+        //Close the PGM image
+        _closeoutpgm();
+        printf( "DataOutStream: Done...\n" );
+    }
+
+  return;
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Initialise and  read orientation, send first tilt event to channel
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+void orientation( client interface i2c_master_if i2c, chanend toDist) {
+  i2c_regop_res_t result;
+  char status_data = 0;
+  int tilted = 0;
+
+  // Configure FXOS8700EQ
+  result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_XYZ_DATA_CFG_REG, 0x01);
+  if (result != I2C_REGOP_SUCCESS) {
+    printf("I2C write reg failed\n");
+  }
+  
+  // Enable FXOS8700EQ
+  result = i2c.write_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_CTRL_REG_1, 0x01);
+  if (result != I2C_REGOP_SUCCESS) {
+    printf("I2C write reg failed\n");
+  }
+
+  //Probe the orientation x-axis forever
+  while (1) {
+
+    //check until new orientation data is available
+    do {
+      status_data = i2c.read_reg(FXOS8700EQ_I2C_ADDR, FXOS8700EQ_DR_STATUS, result);
+    } while (!status_data & 0x08);
+
+    //get new x-axis tilt value
+    int x = read_acceleration(i2c, FXOS8700EQ_OUT_X_MSB);
+
+    //send signal to distributor after first tilt
+    if (!tilted) {
+      if (x>30) {
+        tilted = 1 - tilted;
+        toDist <: 1;
+      }
+    }
+  }
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////
+//
+// Orchestrate concurrent system and start up all threads
+//
+/////////////////////////////////////////////////////////////////////////////////////////
+int main(void) {
+
+i2c_master_if i2c[1];               //interface to orientation
+
+char infname[] = "test.pgm";     //put your input image path here
+char outfname[] = "testout.pgm"; //put your output image path here
+chan c_inIO, c_outIO, c_control, c_outC;    //extend your channel definitions here
+
+par {
+    i2c_master(i2c, 1, p_scl, p_sda, 10);   //server thread providing orientation data
+    orientation(i2c[0],c_control);        //client thread reading orientation data
+    DataInStream(infname, c_inIO);          //thread to read in a PGM image
+    DataOutStream(outfname, c_outIO, c_outC);       //thread to write out a PGM image
+    distributor(buttons, c_inIO, c_outIO, c_control, c_outC);//thread to coordinate work on image
+  }
+
+  return 0;
+}
